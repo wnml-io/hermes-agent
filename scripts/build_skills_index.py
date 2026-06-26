@@ -348,10 +348,10 @@ def main():
         # popular-queries era.
         "skills.sh": 10000,
         "lobehub": 100,
-        # ClawHub API pages in limited slices on CI (rate-limit behavior),
-        # so we keep this guard low while still failing on near-zero fetches.
-        # 511+ entries indicates the source is at least partially reachable.
-        "clawhub": 500,
+        # ClawHub API can return only partial slices in CI under rate-limit
+        # pressure; keep this floor low while still failing on near-zero
+        # fetches.
+        "clawhub": 100,
         "official": 50,
         "github": 30,        # collapsed across all GitHub taps
         "browse-sh": 50,
