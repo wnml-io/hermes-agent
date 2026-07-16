@@ -239,6 +239,7 @@ async def test_session_chat_loads_history_and_preserves_session_headers(auth_ada
     mock_run.assert_awaited_once()
     _, kwargs = mock_run.call_args
     assert kwargs["session_id"] == session_id
+    assert kwargs["model_override"] is None
     assert kwargs["gateway_session_key"] == "client-42"
     assert kwargs["ephemeral_system_prompt"] == "stay focused"
     history = kwargs["conversation_history"]
@@ -249,6 +250,28 @@ async def test_session_chat_loads_history_and_preserves_session_headers(auth_ada
         {"role": "user", "content": "earlier"},
         {"role": "assistant", "content": "prior answer"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_session_chat_uses_persisted_model_override(auth_adapter, session_db):
+    session_id = session_db.create_session(
+        "fast-voice-session",
+        "api_server",
+        model="anthropic/claude-haiku-4-5",
+    )
+    mock_run = AsyncMock(return_value=({"final_response": "Fast answer"}, {"total_tokens": 2}))
+    app = _create_session_app(auth_adapter)
+
+    with patch.object(auth_adapter, "_run_agent", mock_run):
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(
+                f"/api/sessions/{session_id}/chat",
+                json={"message": "hello"},
+                headers={"Authorization": "Bearer sk-test"},
+            )
+
+    assert resp.status == 200
+    assert mock_run.await_args.kwargs["model_override"] == "anthropic/claude-haiku-4-5"
 
 
 @pytest.mark.asyncio
@@ -280,7 +303,7 @@ async def test_session_chat_accepts_multimodal_message(auth_adapter, session_db)
 
 @pytest.mark.asyncio
 async def test_session_chat_stream_accepts_multimodal_message(adapter, session_db):
-    session_id = session_db.create_session("image-stream-session", "api_server")
+    session_id = session_db.create_session("image-stream-session", "api_server", model="fast-model")
     image_payload = [
         {"type": "input_text", "text": "What's in this image?"},
         {"type": "input_image", "image_url": "data:image/png;base64,AAAA"},
@@ -309,6 +332,7 @@ async def test_session_chat_stream_accepts_multimodal_message(adapter, session_d
 
     assert "event: assistant.completed" in body
     assert captured_kwargs["user_message"] == expected_user_message
+    assert captured_kwargs["model_override"] == "fast-model"
 
 
 @pytest.mark.asyncio

@@ -478,6 +478,27 @@ class TestAdapterInit:
         assert isinstance(agent, FakeAgent)
         assert captured["model"] == "primary/model"
 
+    def test_create_agent_honors_persisted_session_model(self, monkeypatch):
+        captured = {}
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        monkeypatch.setattr("run_agent.AIAgent", FakeAgent)
+        monkeypatch.setattr("gateway.run._resolve_runtime_agent_kwargs", lambda: {})
+        monkeypatch.setattr("gateway.run._resolve_gateway_model", lambda: "global-model")
+        monkeypatch.setattr("gateway.run._load_gateway_config", lambda: {})
+        monkeypatch.setattr("gateway.run.GatewayRunner._load_reasoning_config", staticmethod(lambda: {}))
+        monkeypatch.setattr("gateway.run.GatewayRunner._load_fallback_model", staticmethod(lambda: None))
+        monkeypatch.setattr("hermes_cli.tools_config._get_platform_tools", lambda *_: set())
+
+        adapter = APIServerAdapter(PlatformConfig(enabled=True))
+        monkeypatch.setattr(adapter, "_ensure_session_db", lambda: None)
+        adapter._create_agent(session_id="voice-session", model_override="fast-model")
+
+        assert captured["model"] == "fast-model"
+
 
 # ---------------------------------------------------------------------------
 # Auth checking
@@ -4060,6 +4081,27 @@ class TestModelRoutesAgentCreation:
         # The route must NOT be applied — the session override path (global
         # runtime here, since the gateway applies /model separately) wins.
         assert captured["model"] == "global/model"
+        assert captured["api_key"] == "sk-global"
+
+    def test_persisted_session_model_beats_route(self, monkeypatch):
+        captured = {}
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        _patch_create_agent_runtime(monkeypatch, captured, FakeAgent)
+        adapter = _make_routing_adapter({"alias": {"model": "route/model", "api_key": "sk-route"}})
+        monkeypatch.setattr(adapter, "_ensure_session_db", lambda: None)
+        monkeypatch.setattr(adapter, "_session_model_override_for", lambda *_: None)
+
+        adapter._create_agent(
+            session_id="voice-session",
+            model_override="session/model",
+            route=adapter._resolve_route("alias"),
+        )
+
+        assert captured["model"] == "session/model"
         assert captured["api_key"] == "sk-global"
 
     def test_session_override_lookup_reads_gateway_runner(self, monkeypatch):
