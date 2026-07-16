@@ -1235,6 +1235,7 @@ class APIServerAdapter(BasePlatformAdapter):
         self,
         ephemeral_system_prompt: Optional[str] = None,
         session_id: Optional[str] = None,
+        model_override: Optional[str] = None,
         stream_delta_callback=None,
         tool_progress_callback=None,
         tool_start_callback=None,
@@ -1256,6 +1257,10 @@ class APIServerAdapter(BasePlatformAdapter):
         key is meant to persist across transcripts so long-term memory
         providers (e.g. Honcho) can scope their per-chat state correctly
         — matching the semantics of the native gateway's ``session_key``.
+
+        ``model_override`` is the persisted model selected when an API session
+        was created. It takes precedence over static request routing so a
+        resumed session stays on the model it was created for.
 
         ``route`` is an optional ``model_routes`` entry (per-client model
         routing).  When set — and no session ``/model`` override exists for
@@ -1288,15 +1293,19 @@ class APIServerAdapter(BasePlatformAdapter):
         if runtime_model:
             model = runtime_model
 
+        persisted_model = model_override.strip() if isinstance(model_override, str) else None
+        if persisted_model:
+            model = persisted_model
+
         # Per-client model routing (model_routes config).  The route was
         # resolved from the request's ``model`` field by the HTTP handler.
-        # Precedence (highest first): session ``/model`` override → model_routes
-        # route → global config — an explicit user-issued ``/model`` on the
-        # session always beats static per-client route config.
+        # Precedence (highest first): persisted API session model or session
+        # ``/model`` override → model_routes route → global config. A session's
+        # explicit model always beats static per-client route config.
         session_override = self._session_model_override_for(
             gateway_session_key or session_id
         )
-        if route and not session_override:
+        if route and not session_override and not persisted_model:
             if route.get("provider"):
                 # Resolve real credentials for the routed provider (mirrors
                 # the channel_overrides path in gateway/run.py) so a route
@@ -1327,9 +1336,9 @@ class APIServerAdapter(BasePlatformAdapter):
                 model,
                 runtime_kwargs.get("provider"),
             )
-        elif route and session_override:
+        elif route and (session_override or persisted_model):
             logger.debug(
-                "api_server model route skipped: session /model override wins for %s",
+                "api_server model route skipped: session model override wins for %s",
                 gateway_session_key or session_id,
             )
 
@@ -1773,7 +1782,7 @@ class APIServerAdapter(BasePlatformAdapter):
         if auth_err:
             return auth_err
         session_id = request.match_info["session_id"]
-        session, err = self._get_existing_session_or_404(session_id)
+        _, err = self._get_existing_session_or_404(session_id)
         if err:
             return err
         body, err = await self._read_json_body(request)
@@ -1801,7 +1810,7 @@ class APIServerAdapter(BasePlatformAdapter):
         if auth_err:
             return auth_err
         session_id = request.match_info["session_id"]
-        session, err = self._get_existing_session_or_404(session_id)
+        _, err = self._get_existing_session_or_404(session_id)
         if err:
             return err
         db = self._ensure_session_db()
@@ -1882,7 +1891,7 @@ class APIServerAdapter(BasePlatformAdapter):
         if key_err is not None:
             return key_err
         session_id = request.match_info["session_id"]
-        _, err = self._get_existing_session_or_404(session_id)
+        session, err = self._get_existing_session_or_404(session_id)
         if err:
             return err
         body, err = await self._read_json_body(request)
@@ -1900,6 +1909,7 @@ class APIServerAdapter(BasePlatformAdapter):
             conversation_history=history,
             ephemeral_system_prompt=system_prompt,
             session_id=session_id,
+            model_override=session.get("model") if session else None,
             gateway_session_key=gateway_session_key,
         )
         effective_session_id = result.get("session_id") if isinstance(result, dict) else session_id
@@ -1926,7 +1936,7 @@ class APIServerAdapter(BasePlatformAdapter):
         if key_err is not None:
             return key_err
         session_id = request.match_info["session_id"]
-        _, err = self._get_existing_session_or_404(session_id)
+        session, err = self._get_existing_session_or_404(session_id)
         if err:
             return err
         body, err = await self._read_json_body(request)
@@ -1989,6 +1999,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     conversation_history=history,
                     ephemeral_system_prompt=system_prompt,
                     session_id=session_id,
+                    model_override=session.get("model") if session else None,
                     stream_delta_callback=_delta,
                     tool_progress_callback=_tool_progress,
                     gateway_session_key=gateway_session_key,
@@ -4024,6 +4035,7 @@ class APIServerAdapter(BasePlatformAdapter):
         conversation_history: List[Dict[str, str]],
         ephemeral_system_prompt: Optional[str] = None,
         session_id: Optional[str] = None,
+        model_override: Optional[str] = None,
         stream_delta_callback=None,
         tool_progress_callback=None,
         tool_start_callback=None,
@@ -4061,6 +4073,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 agent = self._create_agent(
                     ephemeral_system_prompt=ephemeral_system_prompt,
                     session_id=session_id,
+                    model_override=model_override,
                     stream_delta_callback=stream_delta_callback,
                     tool_progress_callback=tool_progress_callback,
                     tool_start_callback=tool_start_callback,
